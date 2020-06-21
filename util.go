@@ -5,13 +5,16 @@
 package websocket
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 )
 
 var keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -19,6 +22,13 @@ var keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 func computeAcceptKey(challengeKey string) string {
 	h := sha1.New()
 	h.Write([]byte(challengeKey))
+	h.Write(keyGUID)
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+func computeAcceptKeyBytes(challengeKey []byte) string {
+	h := sha1.New()
+	h.Write(challengeKey)
 	h.Write(keyGUID)
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
@@ -197,33 +207,6 @@ func equalASCIIFold(s, t string) bool {
 	return s == t
 }
 
-// tokenListContainsValue returns true if the 1#token header with the given
-// name contains a token equal to value with ASCII case folding.
-func tokenListContainsValue(header http.Header, name string, value string) bool {
-headers:
-	for _, s := range header[name] {
-		for {
-			var t string
-			t, s = nextToken(skipSpace(s))
-			if t == "" {
-				continue headers
-			}
-			s = skipSpace(s)
-			if s != "" && s[0] != ',' {
-				continue headers
-			}
-			if equalASCIIFold(t, value) {
-				return true
-			}
-			if s == "" {
-				continue headers
-			}
-			s = s[1:]
-		}
-	}
-	return false
-}
-
 // parseExtensions parses WebSocket extensions from a header.
 func parseExtensions(header http.Header) []map[string]string {
 	// From RFC 6455:
@@ -280,4 +263,70 @@ headers:
 		}
 	}
 	return result
+}
+
+// tokenListContainsValue returns true if the 1#token header with the given
+// name contains a token equal to value with ASCII case folding.
+func tokenContainsValue(s string, value string) bool {
+	for {
+		var t string
+		t, s = nextToken(skipSpace(s))
+		if t == "" {
+			return false
+		}
+		s = skipSpace(s)
+		if s != "" && s[0] != ',' {
+			return false
+		}
+		if equalASCIIFold(t, value) {
+			return true
+		}
+		if s == "" {
+			return false
+		}
+
+		s = s[1:]
+	}
+}
+
+// tokenListContainsValue returns true if the 1#token header with the given
+// name contains token.
+func tokenListContainsValue(header http.Header, name string, value string) bool {
+	for _, s := range header[name] {
+		if tokenContainsValue(s, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseDataHeader returns a list with values if header value is comma-separated
+func parseDataHeader(headerValue []byte) [][]byte {
+	h := bytes.TrimSpace(headerValue)
+	if bytes.Equal(h, []byte("")) {
+		return nil
+	}
+
+	values := bytes.Split(h, []byte(","))
+	for i := range values {
+		values[i] = bytes.TrimSpace(values[i])
+	}
+	return values
+}
+
+// #nosec G103
+// GetString returns a string pointer without allocation
+func GetString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// #nosec G103
+// GetBytes returns a byte pointer without allocation
+func GetBytes(s string) (bs []byte) {
+	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
+	bh := (*reflect.SliceHeader)(unsafe.Pointer(&bs))
+	bh.Data = sh.Data
+	bh.Len = sh.Len
+	bh.Cap = sh.Len
+	return
 }
